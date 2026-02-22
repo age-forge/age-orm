@@ -7,7 +7,7 @@ from .query import Query, AsyncQuery
 from .references import relationship
 from .event import listen, listens_for
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Vertex",

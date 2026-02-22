@@ -2,7 +2,7 @@
 
 A Python ORM for Apache AGE, providing SQLAlchemy-like abstractions for graph database operations.
 
-**Status:** v0.1.0 — Core implemented (models, CRUD, query builder, relationships, async)
+**Status:** v0.2.0 — Core implemented (models, CRUD, query builder, relationships, async)
 
 ## Features
 
@@ -79,11 +79,12 @@ alice = graph.query(Person).filter_by(name="Alice").one()
 # Traverse
 friends = graph.traverse(alice, "KNOWS", depth=2, target_class=Person)
 
-# Raw Cypher
+# Raw Cypher (columns are returned with named keys)
 results = graph.cypher(
     "MATCH (n:Person)-[:KNOWS]->(m) RETURN n.name, m.name",
-    columns=["a", "b"]
+    columns=["source", "target"]
 )
+# results[0] == {"source": "Alice", "target": "Bob"}
 
 # Cleanup
 db.close()
