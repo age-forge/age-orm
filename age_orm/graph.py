@@ -68,9 +68,9 @@ class Graph:
         # Substitute parameters into Cypher
         resolved_cypher = substitute_cypher_params(cypher, params)
 
-        # Build column clause
+        # Build column clause (quote names to avoid reserved-word conflicts)
         if columns:
-            col_clause = ", ".join(f"{c} agtype" for c in columns)
+            col_clause = ", ".join(f'"{c}" agtype' for c in columns)
         else:
             col_clause = "result agtype"
 
@@ -138,9 +138,9 @@ class Graph:
         if not props:
             return entity
 
-        # Build SET clause
+        # Build SET clause (backtick-escape names to avoid reserved-word conflicts)
         set_parts = ", ".join(
-            f"n.{k} = {format_cypher_value(v)}" for k, v in props.items()
+            f"n.`{k}` = {format_cypher_value(v)}" for k, v in props.items()
         )
         cypher = f"MATCH (n) WHERE id(n) = {entity.graph_id} SET {set_parts} RETURN n"
         self._execute_cypher(cypher, return_type="vertex")
@@ -352,14 +352,20 @@ class Graph:
 
         Args:
             statement: Cypher query string.
-            columns: Column names for the AS clause.
+            columns: Column names for the AS clause. When provided,
+                multi-column results are returned as dicts keyed by
+                column name (instead of col_0, col_1, ...) and scalar
+                values wrapped in {"value": x} are automatically unwrapped.
             return_type: How to parse results ("vertex", "edge", "raw").
             **params: Parameter values to substitute ($name placeholders).
         """
         results = self._execute_cypher(
             statement, params=params, columns=columns, return_type=return_type
         )
-        return [self._hydrate_result(r) for r in results]
+        hydrated = [self._hydrate_result(r) for r in results]
+        if columns:
+            return _remap_columns(hydrated, columns)
+        return hydrated
 
     # === Traversal ===
 
@@ -510,7 +516,7 @@ class Graph:
         with self._db._pool.connection() as conn:
             conn.execute(
                 f'CREATE {unique_str}INDEX IF NOT EXISTS {idx_name} '
-                f'ON {self._name}."{label}" ((properties::json->>\'{field}\'))'
+                f'ON {self._name}."{label}" ((properties::text::json->>\'{field}\'))'
             )
         log.info("Created index: %s", idx_name)
 
@@ -539,8 +545,9 @@ class AsyncGraph:
         """Execute Cypher within AGE's SQL wrapper (async)."""
         resolved_cypher = substitute_cypher_params(cypher, params)
 
+        # Quote column names to avoid reserved-word conflicts
         if columns:
-            col_clause = ", ".join(f"{c} agtype" for c in columns)
+            col_clause = ", ".join(f'"{c}" agtype' for c in columns)
         else:
             col_clause = "result agtype"
 
@@ -588,7 +595,7 @@ class AsyncGraph:
             return entity
 
         set_parts = ", ".join(
-            f"n.{k} = {format_cypher_value(v)}" for k, v in props.items()
+            f"n.`{k}` = {format_cypher_value(v)}" for k, v in props.items()
         )
         cypher = f"MATCH (n) WHERE id(n) = {entity.graph_id} SET {set_parts} RETURN n"
         await self._execute_cypher(cypher, return_type="vertex")
@@ -675,11 +682,24 @@ class AsyncGraph:
         return_type: str = "raw",
         **params,
     ) -> list:
-        """Execute raw Cypher and return results (async)."""
+        """Execute raw Cypher and return results (async).
+
+        Args:
+            statement: Cypher query string.
+            columns: Column names for the AS clause. When provided,
+                multi-column results are returned as dicts keyed by
+                column name (instead of col_0, col_1, ...) and scalar
+                values wrapped in {"value": x} are automatically unwrapped.
+            return_type: How to parse results ("vertex", "edge", "raw").
+            **params: Parameter values to substitute ($name placeholders).
+        """
         results = await self._execute_cypher(
             statement, params=params, columns=columns, return_type=return_type
         )
-        return [self._hydrate_result(r) for r in results]
+        hydrated = [self._hydrate_result(r) for r in results]
+        if columns:
+            return _remap_columns(hydrated, columns)
+        return hydrated
 
     async def ensure_label(self, model_class: type[AgeModel], kind: str = "v") -> None:
         """Ensure a vertex or edge label exists (async)."""
@@ -703,6 +723,47 @@ class AsyncGraph:
                         f"SELECT create_elabel('{self._name}', '{label}')"
                     )
                 log.info("Created %s label: %s", "vertex" if kind == "v" else "edge", label)
+
+
+# === Column Remapping ===
+
+
+def _unwrap_scalar(val):
+    """Unwrap a scalar value from {"value": x} if applicable."""
+    if isinstance(val, dict) and "value" in val and len(val) == 1:
+        return val["value"]
+    return val
+
+
+def _remap_columns(hydrated: list, columns: list[str]) -> list:
+    """Remap col_N keys to named columns and unwrap scalar values.
+
+    For multi-column results (col_0, col_1, ...): renames keys to the
+    provided column names and unwraps {"value": x} scalars.
+    For single-column results: unwraps {"value": x} into {column_name: x}.
+    Model instances and complex dicts pass through unchanged.
+    """
+    if len(columns) > 1:
+        remapped = []
+        for row in hydrated:
+            if isinstance(row, dict) and any(k.startswith("col_") for k in row):
+                new_row = {}
+                for i, col_name in enumerate(columns):
+                    val = row.get(f"col_{i}")
+                    new_row[col_name] = _unwrap_scalar(val)
+                remapped.append(new_row)
+            else:
+                remapped.append(row)
+        return remapped
+    elif len(columns) == 1:
+        remapped = []
+        for row in hydrated:
+            if isinstance(row, dict) and "value" in row and len(row) == 1:
+                remapped.append({columns[0]: row["value"]})
+            else:
+                remapped.append(row)
+        return remapped
+    return hydrated
 
 
 # === Result Parsing Helpers ===

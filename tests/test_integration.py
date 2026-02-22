@@ -339,16 +339,16 @@ class TestRawCypher:
         assert results[0].get("value") == 4
 
     def test_cypher_multi_column_hydrates(self, graph):
-        """cypher() hydrates individual columns in multi-column results."""
+        """cypher() hydrates individual columns in multi-column results with named keys."""
         results = graph.cypher(
             "MATCH (a:Person)-[e:KNOWS]->(b:Person) RETURN a, e, b",
             columns=["a", "e", "b"],
         )
         assert len(results) >= 1
         row = results[0]
-        assert isinstance(row["col_0"], Person)   # source vertex
-        assert isinstance(row["col_1"], Knows)     # edge
-        assert isinstance(row["col_2"], Person)    # target vertex
+        assert isinstance(row["a"], Person)   # source vertex
+        assert isinstance(row["e"], Knows)     # edge
+        assert isinstance(row["b"], Person)    # target vertex
 
 
 class TestBulkOperations:
